@@ -1,0 +1,53 @@
+# Python bytecode and tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Local environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+
+# Datasets (retain room for curated metadata under data/)
+/Data/*
+!/data/metadata/
+!/data/metadata/**
+/data/raw/
+/data/processed/
+
+# Model artifacts and experiment outputs
+Weights/
+weights/
+checkpoints/
+outputs/
+results/
+Results/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+
+# Private research documents and working material
+private/
+proprietary/
+*[Tt]hesis*.pdf
+*[Dd]issertation*.pdf
