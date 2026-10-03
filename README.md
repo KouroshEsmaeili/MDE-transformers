@@ -31,6 +31,34 @@ python -m mypy src
 Datasets, checkpoints, and generated experiment outputs are intentionally not stored in this
 repository.
 
+## NYU Depth V2
+
+Download the official NYU Depth V2 labeled dataset and standard split metadata manually from the
+[NYU Depth V2 project page](https://cs.nyu.edu/~fergus/datasets/nyu_depth_v2.html). Keep both files
+outside this repository, for example:
+
+```text
+/workspace/datasets/nyu_depth_v2/
+├── nyu_depth_v2_labeled.mat
+└── splits.mat
+```
+
+`NYUDepthV2` reads the standard labeled split of 795 training and 654 test images. It does not use
+a separate raw-data evaluation protocol. The default `depths` source is the official in-painted
+labeled depth in meters; `rawDepths` can be selected explicitly. Dataset validity is finite
+positive depth from `validity_source="target"` by default. Set
+`validity_source="rawDepths"` to retain filled target values while supervising only pixels observed
+by the raw sensor. Benchmark range masking remains separate. No hidden subset is applied: use
+`max_samples=N` explicitly for deterministic debugging.
+
+Verify local files without downloading or modifying them:
+
+```bash
+python scripts/verify_nyu.py \
+  --mat-path /workspace/datasets/nyu_depth_v2/nyu_depth_v2_labeled.mat \
+  --split-path /workspace/datasets/nyu_depth_v2/splits.mat
+```
+
 ## Roadmap
 
 1. Define dataset protocols, geometry-aware preprocessing, depth validity rules, and standard
