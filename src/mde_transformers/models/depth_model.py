@@ -46,6 +46,21 @@ class DepthModelConfig:
         _validate_decoder_channels(self.decoder_channels)
         _validate_minimum_depth(self.minimum_depth)
 
+    def is_architecturally_compatible(self, other: DepthModelConfig) -> bool:
+        """Compare tensor architecture while ignoring initialization provenance.
+
+        ``encoder_pretrained`` records how a new run was initialized. It is not required to
+        reconstruct a full checkpoint because strict ``state_dict`` loading replaces all model
+        tensors.
+        """
+        if not isinstance(other, DepthModelConfig):
+            return False
+        return (
+            self.encoder_variant == other.encoder_variant
+            and self.decoder_channels == other.decoder_channels
+            and self.minimum_depth == other.minimum_depth
+        )
+
 
 class MonocularDepthModel(nn.Module):
     """Compose a Swin encoder and coarse-to-fine positive-depth decoder.
@@ -92,6 +107,25 @@ class MonocularDepthModel(nn.Module):
             decoder_channels=config.decoder_channels,
             minimum_depth=config.minimum_depth,
         )
+
+    @classmethod
+    def from_checkpoint_config(cls, config: DepthModelConfig) -> MonocularDepthModel:
+        """Construct checkpoint architecture without fetching initialization weights.
+
+        A checkpoint already contains every model tensor, so downloading generic torchvision
+        initialization would be unnecessary and could make offline evaluation impossible. The
+        original immutable config remains attached for strict compatibility checks.
+        """
+        if not isinstance(config, DepthModelConfig):
+            raise TypeError("config must be a DepthModelConfig")
+        model = cls(
+            encoder_variant=config.encoder_variant,
+            encoder_pretrained=False,
+            decoder_channels=config.decoder_channels,
+            minimum_depth=config.minimum_depth,
+        )
+        model._config = config
+        return model
 
     @property
     def config(self) -> DepthModelConfig:

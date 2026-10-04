@@ -213,3 +213,47 @@ def test_invalid_configuration_is_rejected(kwargs: dict[str, object]) -> None:
 def test_from_config_rejects_untyped_mapping() -> None:
     with pytest.raises(TypeError, match="DepthModelConfig"):
         MonocularDepthModel.from_config({})  # type: ignore[arg-type]
+
+
+def test_architecture_compatibility_excludes_pretrained_initialization_provenance() -> None:
+    pretrained = DepthModelConfig(encoder_pretrained=True, decoder_channels=(8, 8, 8, 8))
+    random_initialization = DepthModelConfig(
+        encoder_pretrained=False,
+        decoder_channels=(8, 8, 8, 8),
+    )
+    different_architecture = DepthModelConfig(
+        encoder_pretrained=True,
+        decoder_channels=(16, 16, 16, 16),
+    )
+
+    assert pretrained.is_architecturally_compatible(random_initialization)
+    assert not pretrained.is_architecturally_compatible(different_architecture)
+
+
+def test_checkpoint_construction_never_requests_pretrained_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mde_transformers.models.depth_model as depth_model_module
+
+    observed: list[bool] = []
+
+    class FakeEncoder(torch.nn.Module):
+        feature_channels = (1, 1, 1, 1)
+        feature_strides = (4, 8, 16, 32)
+        variant = "tiny"
+
+        def __init__(self, variant: str, *, pretrained: bool) -> None:
+            super().__init__()
+            del variant
+            observed.append(pretrained)
+
+        def set_trainable(self, trainable: bool) -> None:
+            del trainable
+
+    monkeypatch.setattr(depth_model_module, "SwinEncoder", FakeEncoder)
+    config = DepthModelConfig(encoder_pretrained=True, decoder_channels=(1, 1, 1, 1))
+
+    model = MonocularDepthModel.from_checkpoint_config(config)
+
+    assert observed == [False]
+    assert model.config.encoder_pretrained

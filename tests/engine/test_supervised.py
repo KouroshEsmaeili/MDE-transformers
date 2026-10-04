@@ -11,14 +11,21 @@ from torch import nn
 
 from mde_transformers.data import DepthBatch
 from mde_transformers.engine import (
+    BestDevState,
+    NYUExperimentConfig,
     TrainingConfig,
+    WarmupCosineScheduler,
     configure_supervised_training_mode,
     create_adamw_optimizer,
     create_checkpoint_state,
     evaluate_depth_batch,
+    load_checkpoint,
     resolve_device,
     restore_checkpoint_state,
+    resume_training_state,
+    save_checkpoint,
     supervised_train_step,
+    update_best_dev,
 )
 from mde_transformers.models import DepthModelConfig
 from mde_transformers.models.decoders import DecoderOutput
@@ -62,6 +69,17 @@ class _TinyDepthModel(nn.Module):
 
     def forward(self, image: torch.Tensor) -> DecoderOutput:
         depth = functional.softplus(self.decoder(self.encoder(image))) + 1e-4
+        return DecoderOutput(depth, depth, depth, depth, depth)
+
+
+class _FixedDepthModel(nn.Module):
+    def __init__(self, prediction: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("prediction", prediction)
+
+    def forward(self, image: torch.Tensor) -> DecoderOutput:
+        del image
+        depth = self.prediction
         return DecoderOutput(depth, depth, depth, depth, depth)
 
 
@@ -175,6 +193,38 @@ def test_evaluation_is_no_grad_and_alignment_is_explicit() -> None:
         )
 
 
+def test_evaluation_intersects_mask_with_range_without_mutating_target() -> None:
+    target = torch.tensor([[[[0.05, 1.0, 11.0]]]])
+    prediction = torch.tensor([[[[100.0, 2.0, 100.0]]]])
+    mask = torch.ones_like(target, dtype=torch.bool)
+    batch = DepthBatch(
+        image=torch.ones((1, 3, 1, 3)),
+        depth=target,
+        valid_mask=mask,
+        intrinsics=None,
+        sample_ids=("range",),
+    )
+    target_before = target.clone()
+    mask_before = mask.clone()
+
+    result = evaluate_depth_batch(
+        _FixedDepthModel(prediction),  # type: ignore[arg-type]
+        batch,
+        device=torch.device("cpu"),
+        stage_weights=_WEIGHTS,
+        alignment="none",
+        depth_range=(0.1, 10.0),
+    )
+
+    assert result.stage_losses == pytest.approx((1.0, 1.0, 1.0, 1.0))
+    assert result.total_loss == pytest.approx(sum(_WEIGHTS))
+    assert result.metrics.abs_rel == pytest.approx(1.0)
+    assert result.metrics.rmse == pytest.approx(1.0)
+    assert result.depth_range == (0.1, 10.0)
+    torch.testing.assert_close(target, target_before)
+    torch.testing.assert_close(mask, mask_before)
+
+
 def test_checkpoint_state_restores_model_and_optimizer_in_memory() -> None:
     seed_everything(6)
     model = _TinyDepthModel()
@@ -242,3 +292,115 @@ def test_deterministic_synthetic_batch_overfits() -> None:
     ).total_loss
 
     assert final < initial * 0.25
+
+
+def test_file_checkpoint_restores_next_epoch_steps_optimizer_and_scheduler(tmp_path) -> None:
+    seed_everything(11)
+    model = _TinyDepthModel()
+    configure_supervised_training_mode(model, encoder_trainable=False)  # type: ignore[arg-type]
+    optimizer = create_adamw_optimizer(model, learning_rate=0.01, weight_decay=0.001)
+    scheduler = WarmupCosineScheduler(
+        optimizer,
+        total_steps=4,
+        warmup_steps=1,
+        warmup_start_factor=0.1,
+    )
+    for _ in range(2):
+        supervised_train_step(
+            model,  # type: ignore[arg-type]
+            _batch(),
+            optimizer,
+            device=torch.device("cpu"),
+            stage_weights=_WEIGHTS,
+        )
+        scheduler.step()
+    training_config = TrainingConfig(
+        epochs=2,
+        learning_rate=0.01,
+        weight_decay=0.001,
+        seed=11,
+        warmup_epochs=0,
+    )
+    experiment_config = NYUExperimentConfig(image_height=4, image_width=5)
+    checkpoint = create_checkpoint_state(
+        model,  # type: ignore[arg-type]
+        optimizer,
+        training_config,
+        epoch=1,
+        step=2,
+        current_loss=0.75,
+        scheduler=scheduler,
+        experiment_config=experiment_config,
+        best_dev_loss=0.75,
+        best_epoch=1,
+    )
+    path = tmp_path / "checkpoint.pt"
+    save_checkpoint(checkpoint, path)
+    loaded = load_checkpoint(path)
+
+    restored_model = _TinyDepthModel()
+    configure_supervised_training_mode(
+        restored_model,
+        encoder_trainable=False,  # type: ignore[arg-type]
+    )
+    restored_optimizer = create_adamw_optimizer(
+        restored_model,
+        learning_rate=0.01,
+        weight_decay=0.001,
+    )
+    restored_scheduler = WarmupCosineScheduler(
+        restored_optimizer,
+        total_steps=4,
+        warmup_steps=1,
+        warmup_start_factor=0.1,
+    )
+    resumed = resume_training_state(
+        loaded,
+        restored_model,  # type: ignore[arg-type]
+        restored_optimizer,
+        restored_scheduler,
+        training_config=training_config,
+        experiment_config=experiment_config,
+    )
+
+    assert resumed.next_epoch == 2
+    assert resumed.global_step == 2
+    assert resumed.best == BestDevState(loss=0.75, epoch=1)
+    assert restored_scheduler.step_count == 2
+    assert restored_scheduler.get_last_lr() == pytest.approx(scheduler.get_last_lr())
+    assert restored_optimizer.state_dict()["state"]
+    for expected, actual in zip(model.parameters(), restored_model.parameters(), strict=True):
+        torch.testing.assert_close(expected, actual)
+
+
+def test_best_dev_tie_keeps_earlier_checkpoint() -> None:
+    current = BestDevState(loss=1.0, epoch=2)
+
+    tied, improved = update_best_dev(epoch=3, dev_loss=1.0, current=current)
+    lower, lower_improved = update_best_dev(epoch=3, dev_loss=0.9, current=current)
+
+    assert tied == current
+    assert not improved
+    assert lower == BestDevState(loss=0.9, epoch=3)
+    assert lower_improved
+
+
+def test_checkpoint_rejects_scheduler_global_step_mismatch() -> None:
+    model = _TinyDepthModel()
+    configure_supervised_training_mode(model, encoder_trainable=False)  # type: ignore[arg-type]
+    optimizer = create_adamw_optimizer(model, learning_rate=0.01, weight_decay=0.0)
+    scheduler = WarmupCosineScheduler(
+        optimizer,
+        total_steps=2,
+        warmup_steps=0,
+    )
+
+    with pytest.raises(ValueError, match="completed optimizer updates"):
+        create_checkpoint_state(
+            model,  # type: ignore[arg-type]
+            optimizer,
+            TrainingConfig(epochs=2),
+            epoch=1,
+            step=1,
+            scheduler=scheduler,
+        )

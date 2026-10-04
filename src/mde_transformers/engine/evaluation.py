@@ -21,6 +21,7 @@ from mde_transformers.metrics import (
     rmse_log,
     silog,
     sq_rel,
+    valid_depth_mask,
 )
 from mde_transformers.models import MonocularDepthModel
 from mde_transformers.models.decoders import DecoderOutput
@@ -50,6 +51,7 @@ class EvaluationResult:
     stage_losses: tuple[float, ...]
     metrics: DepthMetricResult
     alignment: EvaluationAlignment
+    depth_range: tuple[float, float] | None
 
 
 @torch.no_grad()
@@ -60,12 +62,16 @@ def evaluate_depth_batch(
     device: torch.device,
     stage_weights: Sequence[float],
     alignment: EvaluationAlignment,
+    depth_range: tuple[float, float] | None = None,
 ) -> EvaluationResult:
     """Evaluate a batch without changing parameter trainability.
 
     The multi-scale masked-L1 loss always uses raw D1--D4 physical depths. Metrics use the
     full-resolution output and equal-weight per-image aggregation. ``alignment='median'`` applies
     a separate scale to each image for metrics only; ``'none'`` performs metric-scale evaluation.
+    When supplied, ``depth_range=(minimum, maximum)`` intersects the authoritative dataset mask
+    with finite-positive inclusive target range validity for both validation loss and metrics.
+    The target tensor is never clipped or mutated.
     """
     if alignment not in ("none", "median"):
         raise ValueError("alignment must be 'none' or 'median'")
@@ -74,10 +80,20 @@ def evaluate_depth_batch(
     output = model(batch_on_device.image)
     if not isinstance(output, DecoderOutput):
         raise TypeError("model must return DecoderOutput")
+    evaluation_mask = batch_on_device.valid_mask
+    if depth_range is not None:
+        if not isinstance(depth_range, tuple) or len(depth_range) != 2:
+            raise ValueError("depth_range must contain (minimum, maximum)")
+        evaluation_mask = valid_depth_mask(
+            batch_on_device.depth,
+            depth_range[0],
+            depth_range[1],
+            batch_on_device.valid_mask,
+        )
     loss_result = multi_scale_depth_loss(
         output.stage_depths(),
         batch_on_device.depth,
-        batch_on_device.valid_mask,
+        evaluation_mask,
         stage_weights,
         loss_fn=masked_l1_loss,
     )
@@ -89,7 +105,7 @@ def evaluate_depth_batch(
                 align_median(
                     metric_prediction[index],
                     batch_on_device.depth[index],
-                    batch_on_device.valid_mask[index],
+                    evaluation_mask[index],
                 )
                 for index in range(metric_prediction.shape[0])
             ),
@@ -103,7 +119,7 @@ def evaluate_depth_batch(
             metric,
             metric_prediction,
             batch_on_device.depth,
-            batch_on_device.valid_mask,
+            evaluation_mask,
         )
         return float(value.item())
 
@@ -122,4 +138,5 @@ def evaluate_depth_batch(
         stage_losses=tuple(float(loss.item()) for loss in loss_result.stage_losses),
         metrics=metrics,
         alignment=alignment,
+        depth_range=depth_range,
     )
