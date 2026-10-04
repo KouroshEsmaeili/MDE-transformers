@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
     "torch>=2.1",
+    "torchvision>=0.29,<0.30",
 ]
 
 [project.optional-dependencies]
@@ -51,5 +52,5 @@ warn_unused_configs = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["h5py", "scipy.io"]
+module = ["h5py", "scipy.io", "torchvision.*"]
 ignore_missing_imports = true
