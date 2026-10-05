@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import cast
 
 from mde_transformers.data import NYUDepthV2
 from mde_transformers.engine import (
-    NYUPreprocess,
+    NYUEvaluationPreprocess,
     create_nyu_evaluation_loader,
     load_checkpoint,
     resolve_device,
     validate_one_epoch,
 )
+from mde_transformers.metrics import NYUCrop, NYUEvaluationProtocol
 from mde_transformers.models import MonocularDepthModel
 from mde_transformers.utils import seed_everything
 
@@ -29,6 +31,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--alignment", choices=("none", "median"), default=None)
+    parser.add_argument(
+        "--crop",
+        choices=("none", "nyu-eigen"),
+        default=None,
+        help="explicit evaluation crop; defaults to the checkpoint's dev protocol",
+    )
     parser.add_argument(
         "--max-samples",
         type=int,
@@ -52,13 +60,27 @@ def main() -> None:
     if num_workers < 0:
         raise ValueError("--num-workers must be non-negative")
     alignment = experiment.alignment if args.alignment is None else args.alignment
+    crop = (
+        experiment.evaluation_crop
+        if args.crop is None
+        else cast(NYUCrop, args.crop.replace("-", "_"))
+    )
+    protocol = NYUEvaluationProtocol(
+        depth_range=(experiment.min_depth, experiment.max_depth),
+        alignment=alignment,
+        crop=crop,
+    )
     seed_everything(checkpoint.seed)
     device = resolve_device(args.device)
 
     model = MonocularDepthModel.from_checkpoint_config(checkpoint.model_config).to(device)
     model.load_state_dict(checkpoint.model_state_dict, strict=True)
     model.eval()
-    preprocess = NYUPreprocess(experiment.image_height, experiment.image_width)
+    preprocess = NYUEvaluationPreprocess(
+        experiment.image_height,
+        experiment.image_width,
+        crop=protocol.crop,
+    )
     dataset = NYUDepthV2(
         args.mat_path,
         args.split_path,
@@ -81,13 +103,14 @@ def main() -> None:
             device=device,
             stage_weights=checkpoint.training_config.stage_weights,
             epoch=max(checkpoint.epoch, 1),
-            alignment=alignment,
-            depth_range=(experiment.min_depth, experiment.max_depth),
+            alignment=protocol.alignment,
+            depth_range=protocol.depth_range,
         )
         scope = "TRUNCATED_DIAGNOSTIC" if args.max_samples is not None else "FULL_OFFICIAL_TEST"
         print(
             f"evaluation_scope={scope} samples={result.samples} split=official_test "
-            f"alignment={result.alignment} range={result.depth_range} crop=none"
+            f"protocol={protocol.profile_name} alignment={result.alignment} "
+            f"range={result.depth_range} crop={protocol.crop}"
         )
         print(
             f"loss={result.losses.total:.6f} abs_rel={result.metrics.abs_rel:.6f} "

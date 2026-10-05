@@ -26,7 +26,9 @@ def _dataset_splits(script_name: str) -> list[str]:
 
 
 def test_training_command_can_construct_only_official_train_split() -> None:
-    assert _dataset_splits("train_nyu.py") == ["train"]
+    splits = _dataset_splits("train_nyu.py")
+    assert splits
+    assert set(splits) == {"train"}
 
 
 def test_evaluation_command_explicitly_constructs_only_official_test_split() -> None:
@@ -37,3 +39,16 @@ def test_truncated_test_evaluation_is_visibly_labeled() -> None:
     script = (Path(__file__).parents[2] / "scripts" / "evaluate_nyu.py").read_text(encoding="utf-8")
     assert "TRUNCATED_DIAGNOSTIC" in script
     assert "not full-test benchmark results" in script
+
+
+def test_commands_expose_and_record_explicit_crop_policies() -> None:
+    root = Path(__file__).parents[2] / "scripts"
+    train_script = (root / "train_nyu.py").read_text(encoding="utf-8")
+    evaluation_script = (root / "evaluate_nyu.py").read_text(encoding="utf-8")
+
+    assert '"--training-crop"' in train_script
+    assert '"--evaluation-crop"' in train_script
+    assert "training_crop=" in train_script
+    assert "evaluation_crop=" in train_script
+    assert '"--crop"' in evaluation_script
+    assert "protocol={protocol.profile_name}" in evaluation_script

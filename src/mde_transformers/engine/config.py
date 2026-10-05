@@ -8,6 +8,8 @@ from typing import Literal
 
 import torch
 
+from mde_transformers.metrics import NYUCrop, NYUEvaluationProtocol
+
 DeviceSpec = Literal["auto", "cpu", "cuda"]
 EncoderPolicy = Literal["frozen", "trainable"]
 StageWeights = tuple[float, float, float, float]
@@ -58,7 +60,9 @@ class NYUExperimentConfig:
 
     ``max_train_samples`` and ``max_dev_samples`` are explicit diagnostic limits applied only
     after the complete official training split has been partitioned. They default to ``None``.
-    The only currently grounded crop policy is ``none``; no NYU crop constants are inferred.
+    ``training_crop`` controls synchronized native-space training preprocessing. The independent
+    ``evaluation_crop`` controls a native-space mask for train-derived dev metrics. Both default
+    to the previously validated uncropped behavior.
     """
 
     validation_fraction: float = 0.1
@@ -70,7 +74,8 @@ class NYUExperimentConfig:
     alignment: Literal["none", "median"] = "none"
     min_depth: float = 0.1
     max_depth: float = 10.0
-    crop: Literal["none"] = "none"
+    training_crop: NYUCrop = "none"
+    evaluation_crop: NYUCrop = "none"
     max_train_samples: int | None = None
     max_dev_samples: int | None = None
 
@@ -89,10 +94,24 @@ class NYUExperimentConfig:
         _validate_positive_real(self.max_depth, "max_depth")
         if self.max_depth <= self.min_depth:
             raise ValueError("max_depth must be greater than min_depth")
-        if self.crop != "none":
-            raise ValueError("crop must be 'none' until a sourced NYU crop is implemented")
+        NYUEvaluationProtocol(
+            depth_range=(self.min_depth, self.max_depth),
+            alignment=self.alignment,
+            crop=self.evaluation_crop,
+        )
+        if self.training_crop not in ("none", "nyu_eigen"):
+            raise ValueError("training_crop must be 'none' or 'nyu_eigen'")
         _validate_optional_positive_integer(self.max_train_samples, "max_train_samples")
         _validate_optional_positive_integer(self.max_dev_samples, "max_dev_samples")
+
+    @property
+    def evaluation_protocol(self) -> NYUEvaluationProtocol:
+        """Return the explicitly configured train-derived dev evaluation protocol."""
+        return NYUEvaluationProtocol(
+            depth_range=(self.min_depth, self.max_depth),
+            alignment=self.alignment,
+            crop=self.evaluation_crop,
+        )
 
 
 def resolve_device(device: DeviceSpec) -> torch.device:

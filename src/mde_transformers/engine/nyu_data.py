@@ -16,22 +16,81 @@ from mde_transformers.data import (
     DepthSample,
     NYUDepthV2,
     collate_depth_samples,
+    crop_depth_sample,
     normalize_imagenet_sample,
     resize_depth_sample,
     split_train_dev_indices,
 )
 from mde_transformers.engine.config import NYUExperimentConfig, TrainingConfig
+from mde_transformers.metrics import (
+    NYU_EIGEN_CROP,
+    NYU_NATIVE_IMAGE_SIZE,
+    NYUCrop,
+    nyu_native_crop_mask,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class NYUPreprocess:
-    """Deterministically resize synchronized sample geometry, then normalize RGB only."""
+    """Apply an optional native training crop, synchronized resize, then RGB normalization.
+
+    The ``nyu_eigen`` training option is an explicit implementation choice, not an assertion that
+    this standard literature crop is the thesis's unresolved indoor training crop. Cropping occurs
+    in native ``480 x 640`` coordinates before resize and updates RGB, depth, validity, and K.
+    """
 
     image_height: int
     image_width: int
+    training_crop: NYUCrop = "none"
 
     def __call__(self, sample: DepthSample) -> DepthSample:
-        resized = resize_depth_sample(sample, (self.image_height, self.image_width))
+        spatial_sample = sample
+        if self.training_crop == "nyu_eigen":
+            _require_native_nyu_size(sample)
+            spatial_sample = crop_depth_sample(
+                sample,
+                top=NYU_EIGEN_CROP.top,
+                left=NYU_EIGEN_CROP.left,
+                height=NYU_EIGEN_CROP.bottom - NYU_EIGEN_CROP.top,
+                width=NYU_EIGEN_CROP.right - NYU_EIGEN_CROP.left,
+            )
+        elif self.training_crop != "none":
+            raise ValueError("training_crop must be 'none' or 'nyu_eigen'")
+        resized = resize_depth_sample(
+            spatial_sample,
+            (self.image_height, self.image_width),
+        )
+        return normalize_imagenet_sample(resized)
+
+
+@dataclass(frozen=True, slots=True)
+class NYUEvaluationPreprocess:
+    """Apply an evaluation mask in native target space before deterministic resize.
+
+    Unlike a training crop, ``nyu_eigen`` does not crop the model input. It intersects the
+    authoritative validity mask with the exact native-coordinate evaluation mask, then resizes
+    that mask alongside depth using the project's nearest-exact geometry. Literal crop constants
+    are therefore never applied to a resized image.
+    """
+
+    image_height: int
+    image_width: int
+    crop: NYUCrop = "none"
+
+    def __call__(self, sample: DepthSample) -> DepthSample:
+        native_crop_mask = nyu_native_crop_mask(
+            self.crop,
+            sample.image_size,
+            device=sample.valid_mask.device,
+        )
+        masked_sample = DepthSample(
+            image=sample.image,
+            depth=sample.depth,
+            valid_mask=sample.valid_mask & native_crop_mask.unsqueeze(0),
+            intrinsics=sample.intrinsics,
+            sample_id=sample.sample_id,
+        )
+        resized = resize_depth_sample(masked_sample, (self.image_height, self.image_width))
         return normalize_imagenet_sample(resized)
 
 
@@ -85,6 +144,7 @@ def create_nyu_train_dev_loaders(
     *,
     training_config: TrainingConfig,
     experiment_config: NYUExperimentConfig,
+    dev_dataset: NYUDepthV2 | None = None,
 ) -> NYUTrainDevLoaders:
     """Partition an official NYU training dataset and construct deterministic loaders.
 
@@ -93,7 +153,12 @@ def create_nyu_train_dev_loaders(
     """
     if dataset.split != "train":
         raise ValueError("training loaders require NYUDepthV2(split='train')")
+    if dev_dataset is not None and dev_dataset.split != "train":
+        raise ValueError("dev loader source must also be NYUDepthV2(split='train')")
+    dev_source = dataset if dev_dataset is None else dev_dataset
     official_count = len(dataset)
+    if len(dev_source) != official_count:
+        raise ValueError("training and dev dataset views must cover the same official split")
     partition = split_train_dev_indices(
         tuple(range(official_count)),
         validation_fraction=experiment_config.validation_fraction,
@@ -127,7 +192,7 @@ def create_nyu_train_dev_loaders(
     dev_loader = cast(
         DataLoader[DepthBatch],
         DataLoader(
-            Subset(dataset, effective_dev_indices),
+            Subset(dev_source, effective_dev_indices),
             batch_size=training_config.batch_size,
             shuffle=False,
             num_workers=experiment_config.num_workers,
@@ -188,3 +253,8 @@ def _limit_indices(indices: tuple[int, ...], limit: int | None) -> tuple[int, ..
     if limit is None:
         return indices
     return indices[:limit]
+
+
+def _require_native_nyu_size(sample: DepthSample) -> None:
+    if sample.image_size != NYU_NATIVE_IMAGE_SIZE:
+        raise ValueError("nyu_eigen training crop must be applied to native NYU 480x640 samples")

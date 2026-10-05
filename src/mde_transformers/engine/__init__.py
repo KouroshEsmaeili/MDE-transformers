@@ -36,6 +36,7 @@ from mde_transformers.engine.experiment import (
 )
 from mde_transformers.engine.nyu_data import (
     EpochShuffleSampler,
+    NYUEvaluationPreprocess,
     NYUPreprocess,
     NYUTrainDevLoaders,
     create_nyu_evaluation_loader,
@@ -61,6 +62,7 @@ __all__ = [
     "EvaluationAlignment",
     "EvaluationResult",
     "NYUExperimentConfig",
+    "NYUEvaluationPreprocess",
     "NYUPreprocess",
     "NYUTrainDevLoaders",
     "ResumeState",

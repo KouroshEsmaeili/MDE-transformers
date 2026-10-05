@@ -59,6 +59,24 @@ python scripts/verify_nyu.py \
   --split-path /workspace/datasets/nyu_depth_v2/splits.mat
 ```
 
+### NYU protocol lock
+
+NYU range masking is applied explicitly at evaluation time; the loader never clips target depth.
+Crop coordinates are defined in the native `480 x 640` target space and are never applied as
+literal coordinates after resize.
+
+| Protocol | Depth range | Alignment | Evaluation crop | Status |
+| --- | --- | --- | --- | --- |
+| Raw metric baseline | `[0.1, 10.0]` m | none | none | Primary supervised baseline |
+| Standard NYU Eigen evaluation | `[0.1, 10.0]` m | explicit (profile default: median) | rows `[45, 471)`, columns `[41, 601)` | Literature-standard option |
+| Historical thesis reproduction | `[0.1, 10.0]` m | median | fixed indoor crop | Exact crop coordinates unresolved |
+
+The thesis text available for reconstruction states that an indoor crop is used for NYU training
+and that the final table uses an indoor crop with median alignment, but it does not state exact
+pixel bounds. Consequently, `nyu_eigen` is never silently described as the thesis crop. Training
+defaults to `training_crop="none"`; selecting `nyu_eigen` explicitly crops synchronized RGB,
+depth, validity, and intrinsics in native space before resizing.
+
 ## Roadmap
 
 1. Define dataset protocols, geometry-aware preprocessing, depth validity rules, and standard

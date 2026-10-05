@@ -8,10 +8,12 @@ import json
 import math
 from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 
 from mde_transformers.data import NYUDepthV2
 from mde_transformers.engine import (
     BestDevState,
+    NYUEvaluationPreprocess,
     NYUExperimentConfig,
     NYUPreprocess,
     TrainingConfig,
@@ -31,6 +33,7 @@ from mde_transformers.engine import (
     validate_one_epoch,
     write_run_manifest,
 )
+from mde_transformers.metrics import NYUCrop
 from mde_transformers.models import DepthModelConfig, MonocularDepthModel
 from mde_transformers.utils import seed_everything
 
@@ -74,6 +77,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--depth-source", choices=("depths", "rawDepths"), default="depths")
     parser.add_argument("--validity-source", choices=("target", "rawDepths"), default="target")
     parser.add_argument("--alignment", choices=("none", "median"), default="none")
+    parser.add_argument(
+        "--training-crop",
+        choices=("none", "nyu-eigen"),
+        default="none",
+        help="native-space synchronized training crop; default preserves uncropped behavior",
+    )
+    parser.add_argument(
+        "--evaluation-crop",
+        choices=("none", "nyu-eigen"),
+        default="none",
+        help="native-space mask for train-derived dev evaluation",
+    )
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument(
         "--max-train-samples",
@@ -126,6 +141,8 @@ def main() -> None:
         validity_source=args.validity_source,
         num_workers=args.num_workers,
         alignment=args.alignment,
+        training_crop=_parse_crop(args.training_crop),
+        evaluation_crop=_parse_crop(args.evaluation_crop),
         max_train_samples=args.max_train_samples,
         max_dev_samples=args.max_dev_samples,
     )
@@ -150,20 +167,38 @@ def main() -> None:
         encoder_trainable=training_config.encoder_policy == "trainable",
     )
 
-    preprocess = NYUPreprocess(experiment_config.image_height, experiment_config.image_width)
+    train_preprocess = NYUPreprocess(
+        experiment_config.image_height,
+        experiment_config.image_width,
+        training_crop=experiment_config.training_crop,
+    )
+    dev_preprocess = NYUEvaluationPreprocess(
+        experiment_config.image_height,
+        experiment_config.image_width,
+        crop=experiment_config.evaluation_crop,
+    )
     dataset = NYUDepthV2(
         args.mat_path,
         args.split_path,
         split="train",
         depth_source=experiment_config.depth_source,
         validity_source=experiment_config.validity_source,
-        transform=preprocess,
+        transform=train_preprocess,
+    )
+    dev_dataset = NYUDepthV2(
+        args.mat_path,
+        args.split_path,
+        split="train",
+        depth_source=experiment_config.depth_source,
+        validity_source=experiment_config.validity_source,
+        transform=dev_preprocess,
     )
     try:
         loaders = create_nyu_train_dev_loaders(
             dataset,
             training_config=training_config,
             experiment_config=experiment_config,
+            dev_dataset=dev_dataset,
         )
         optimizer = create_adamw_optimizer(
             model,
@@ -267,6 +302,7 @@ def main() -> None:
                 break
     finally:
         dataset.close()
+        dev_dataset.close()
 
 
 def _validate_runtime_args(args: argparse.Namespace, training_config: TrainingConfig) -> None:
@@ -277,6 +313,10 @@ def _validate_runtime_args(args: argparse.Namespace, training_config: TrainingCo
         and not 1 <= args.stop_after_epoch <= training_config.epochs
     ):
         raise ValueError("--stop-after-epoch must lie within configured epochs")
+
+
+def _parse_crop(value: str) -> NYUCrop:
+    return cast(NYUCrop, value.replace("-", "_"))
 
 
 def _print_configuration(

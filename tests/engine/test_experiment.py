@@ -17,6 +17,8 @@ def test_run_manifest_contains_reproducible_configs_without_dataset_paths(tmp_pa
             validation_fraction=0.2,
             image_height=128,
             image_width=160,
+            training_crop="nyu_eigen",
+            evaluation_crop="nyu_eigen",
             max_train_samples=2,
             max_dev_samples=1,
         ),
@@ -33,6 +35,8 @@ def test_run_manifest_contains_reproducible_configs_without_dataset_paths(tmp_pa
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["training"]["seed"] == 17
     assert payload["nyu_experiment"]["validation_fraction"] == 0.2
+    assert payload["nyu_experiment"]["training_crop"] == "nyu_eigen"
+    assert payload["nyu_experiment"]["evaluation_crop"] == "nyu_eigen"
     assert payload["split_sizes"]["official_train"] == 795
     assert payload["resolved_device"] == "cpu"
     serialized = path.read_text(encoding="utf-8")

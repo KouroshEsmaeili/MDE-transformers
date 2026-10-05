@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 import torch
@@ -371,6 +372,20 @@ def test_file_checkpoint_restores_next_epoch_steps_optimizer_and_scheduler(tmp_p
     assert restored_optimizer.state_dict()["state"]
     for expected, actual in zip(model.parameters(), restored_model.parameters(), strict=True):
         torch.testing.assert_close(expected, actual)
+
+    for incompatible in (
+        replace(experiment_config, training_crop="nyu_eigen"),
+        replace(experiment_config, evaluation_crop="nyu_eigen"),
+    ):
+        with pytest.raises(ValueError, match="experiment configuration"):
+            resume_training_state(
+                loaded,
+                restored_model,  # type: ignore[arg-type]
+                restored_optimizer,
+                restored_scheduler,
+                training_config=training_config,
+                experiment_config=incompatible,
+            )
 
 
 def test_best_dev_tie_keeps_earlier_checkpoint() -> None:

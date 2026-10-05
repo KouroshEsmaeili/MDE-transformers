@@ -168,9 +168,18 @@ def load_checkpoint(
     training_values = dict(payload["training_config"])
     training_values["stage_weights"] = tuple(training_values["stage_weights"])
     experiment_payload = payload["experiment_config"]
-    experiment_config = (
-        None if experiment_payload is None else NYUExperimentConfig(**dict(experiment_payload))
-    )
+    experiment_config = None
+    if experiment_payload is not None:
+        experiment_values = dict(experiment_payload)
+        # Milestone-10 checkpoints stored the only supported dev crop as ``crop='none'``.
+        # Preserve that meaning while making training and evaluation preprocessing independent.
+        legacy_crop = experiment_values.pop("crop", None)
+        experiment_values.setdefault("training_crop", "none")
+        experiment_values.setdefault(
+            "evaluation_crop",
+            "none" if legacy_crop is None else legacy_crop,
+        )
+        experiment_config = NYUExperimentConfig(**experiment_values)
     checkpoint = CheckpointState(
         model_state_dict=dict(payload["model_state_dict"]),
         optimizer_state_dict=dict(payload["optimizer_state_dict"]),
