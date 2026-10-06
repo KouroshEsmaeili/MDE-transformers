@@ -20,18 +20,32 @@ venv/
 !.env.example
 *.pem
 *.key
+*.p12
+*.pfx
+/credentials/
+/secrets/
 
 # Editor and operating-system files
 .idea/
 .vscode/
 .DS_Store
 
+# Local assistant and scratch artifacts
+.agents/
+.codex/
+AGENTS.md
+scratch/
+
 # Datasets (retain room for curated metadata under data/)
 /Data/*
 !/data/metadata/
 !/data/metadata/**
+/dataset/
+/datasets/
 /data/raw/
 /data/processed/
+nyu_depth_v2_labeled.mat
+splits.mat
 
 # Model artifacts and experiment outputs
 Weights/
@@ -40,6 +54,8 @@ checkpoints/
 outputs/
 results/
 Results/
+/experiments/
+/runs/
 *.pth
 *.pt
 *.ckpt
@@ -49,5 +65,6 @@ Results/
 # Private research documents and working material
 private/
 proprietary/
-*[Tt]hesis*.pdf
-*[Dd]issertation*.pdf
+confidential/
+*[Tt][Hh][Ee][Ss][Ii][Ss]*.[Pp][Dd][Ff]
+*[Dd][Ii][Ss][Ss][Ee][Rr][Tt][Aa][Tt][Ii][Oo][Nn]*.[Pp][Dd][Ff]

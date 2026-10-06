@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mde-transformers"
 version = "0.1.0"
-description = "Research foundations for transformer-based monocular depth estimation"
+description = "Reproducible transformer-based monocular depth estimation research codebase"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
